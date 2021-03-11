@@ -1,7 +1,6 @@
-/* pocl_runtime_config.h: functions to query pocl runtime configuration
-   settings
+/* Test that pocl libraries can be dlopen()ed
 
-   Copyright (c) 2013 Pekka Jääskeläinen
+   Copyright (c) 2021 pocl developers
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to
@@ -22,25 +21,43 @@
    IN THE SOFTWARE.
 */
 
-#ifndef _POCL_RUNTIME_CONFIG_H
-#define _POCL_RUNTIME_CONFIG_H
+#include <dlfcn.h>
+#include <stdio.h>
 
-#include "pocl_export.h"
+int
+main (int argc, char **argv)
+{
+  int ret = 0;
+  const char *libpocl = "$ORIGIN/../../lib/CL/libpocl.so";
+  char libdevice[4096] = "";
+  if (argc > 1)
+    snprintf (libdevice, sizeof (libdevice),
+              "$ORIGIN/../../lib/CL/devices/%s/libpocl-devices-%s.so", argv[1],
+              argv[1]);
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+  void *handle_libpocl = dlopen (libpocl, RTLD_NOW | RTLD_GLOBAL);
+  if (!handle_libpocl)
+    {
+      fprintf (stderr, "dlopen(%s, RTLD_NOW | RTLD_GLOBAL) failed: %s\n",
+               libpocl, dlerror ());
+      ret = 1;
+    }
 
-int pocl_is_option_set(const char *key);
-POCL_EXPORT
-int pocl_get_int_option(const char *key, int default_value);
-POCL_EXPORT
-int pocl_get_bool_option(const char *key, int default_value);
-const char* pocl_get_string_option(const char *key, const char *default_value);
+  if (ret == 0 && argc > 1)
+    {
+      void *handle_device = dlopen (libdevice, RTLD_NOW);
+      if (!handle_device)
+        {
+          fprintf (stderr, "dlopen(%s, RTLD_NOW) failed: %s\n", libdevice,
+                   dlerror ());
+          ret = 1;
+        }
+      if (handle_device)
+        dlclose (handle_device);
+    }
 
-#ifdef __cplusplus
+  if (handle_libpocl)
+    dlclose (handle_libpocl);
+
+  return ret;
 }
-#endif
-
-
-#endif

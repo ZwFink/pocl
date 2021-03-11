@@ -17,6 +17,8 @@
 
 #include "config.h"
 
+#include "pocl_export.h"
+
 // size_t print spec
 #ifndef PRIuS
 # define PRIuS "zu"
@@ -103,14 +105,12 @@ extern "C" {
                               *errcode_ret = CL_SUCCESS;                \
                             } } while (0)
 
-
-
-#include "config.h"
-
 #ifdef POCL_DEBUG_MESSAGES
 
+POCL_EXPORT
     extern uint64_t pocl_debug_messages_filter;
-    extern int stderr_is_a_tty;
+POCL_EXPORT
+    extern int pocl_stderr_is_a_tty;
 
     #define POCL_DEBUGGING_ON (pocl_debug_messages_filter)
 
@@ -122,9 +122,12 @@ extern "C" {
 
         #define POCL_DEBUG_HEADER(FILTER, FILTER_TYPE) \
             pocl_debug_print_header (__func__, __LINE__, #FILTER, FILTER_TYPE);
+POCL_EXPORT
         extern void pocl_debug_output_lock ();
+POCL_EXPORT
         extern void pocl_debug_output_unlock ();
         extern void pocl_debug_messages_setup (const char *debug);
+POCL_EXPORT
         extern void pocl_debug_print_header (const char * func, unsigned line,
                                              const char* filter, int filter_type);
         extern void pocl_debug_measure_start (uint64_t* start);
@@ -148,7 +151,7 @@ extern "C" {
           if (pocl_debug_messages_filter & POCL_DEBUG_FLAG_ ## FILTER) {    \
             pocl_debug_output_lock ();                                      \
                 POCL_DEBUG_HEADER(FILTER, POCL_FILTER_TYPE_ ## TYPE)        \
-                if (stderr_is_a_tty)                                        \
+                if (pocl_stderr_is_a_tty)                                   \
                   fprintf (stderr, "%s", POCL_COLOR_BOLDRED                 \
                                     ERRCODE " "  POCL_COLOR_RESET);         \
                 else                                                        \

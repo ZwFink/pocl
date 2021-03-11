@@ -1,7 +1,6 @@
-/* pocl_runtime_config.h: functions to query pocl runtime configuration
-   settings
+/* pocl_export.h: macros for symbol visibility
 
-   Copyright (c) 2013 Pekka Jääskeläinen
+   Copyright (c) 2021 pocl developers
 
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to
@@ -22,25 +21,13 @@
    IN THE SOFTWARE.
 */
 
-#ifndef _POCL_RUNTIME_CONFIG_H
-#define _POCL_RUNTIME_CONFIG_H
+#ifndef POCL_EXPORT_H
+#define POCL_EXPORT_H
 
-#include "pocl_export.h"
-
-#ifdef __cplusplus
-extern "C" {
+#if defined(__GNUC__) && (__GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__ >= 1)
+#define POCL_EXPORT __attribute__ ((visibility ("default")))
+#else
+#define POCL_EXPORT
 #endif
-
-int pocl_is_option_set(const char *key);
-POCL_EXPORT
-int pocl_get_int_option(const char *key, int default_value);
-POCL_EXPORT
-int pocl_get_bool_option(const char *key, int default_value);
-const char* pocl_get_string_option(const char *key, const char *default_value);
-
-#ifdef __cplusplus
-}
-#endif
-
 
 #endif

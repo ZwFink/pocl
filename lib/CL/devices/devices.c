@@ -80,7 +80,6 @@
 /* the enabled devices */
 static struct _cl_device_id* pocl_devices = NULL;
 unsigned int pocl_num_devices = 0;
-unsigned int pocl_num_device_types = 0;
 
 /* Init function prototype */
 typedef void (*init_device_ops)(struct pocl_device_ops*);
@@ -531,7 +530,7 @@ pocl_init_devices ()
 #ifdef POCL_DEBUG_MESSAGES
   const char* debug = pocl_get_string_option ("POCL_DEBUG", "0");
   pocl_debug_messages_setup (debug);
-  stderr_is_a_tty = isatty(fileno(stderr));
+  pocl_stderr_is_a_tty = isatty(fileno(stderr));
 #endif
 
   POCL_GOTO_ERROR_ON ((pocl_cache_init_topdir ()), CL_DEVICE_NOT_FOUND,
@@ -595,11 +594,23 @@ pocl_init_devices ()
             {
               pocl_devices_init_ops[i] = (init_device_ops)dlsym (
                   pocl_device_handles[i], init_device_ops_name);
-              pocl_devices_init_ops[i](&pocl_device_ops[i]);
+              if (pocl_devices_init_ops[i] != NULL)
+                {
+                  pocl_devices_init_ops[i](&pocl_device_ops[i]);
+                }
+              else
+                {
+                  POCL_MSG_ERR ("Loading symbol %s from %s failed: %s\n",
+                                init_device_ops_name, device_library,
+                                dlerror ());
+                  device_count[i] = 0;
+                  continue;
+                }
             }
           else
             {
-              POCL_MSG_WARN ("Loading %s failed.\n", device_library);
+              POCL_MSG_WARN ("Loading %s failed: %s\n", device_library,
+                             dlerror ());
               device_count[i] = 0;
               continue;
             }

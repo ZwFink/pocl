@@ -39,6 +39,7 @@ else()
     NAMES
       "llvmtce-config"
       "llvm-config"
+      "llvm-config-mp-13.0" "llvm-config-13" "llvm-config130"
       "llvm-config-mp-12.0" "llvm-config-12" "llvm-config120"
       "llvm-config-mp-11.0" "llvm-config-11" "llvm-config110"
       "llvm-config-mp-10.0" "llvm-config-10" "llvm-config100"
@@ -74,13 +75,14 @@ get_filename_component(LLVM_CONFIG_LOCATION "${LLVM_CONFIG}" DIRECTORY)
 macro(run_llvm_config VARIABLE_NAME)
   execute_process(
     COMMAND "${LLVM_CONFIG}" ${ARGN}
-    OUTPUT_VARIABLE ${VARIABLE_NAME}
+    OUTPUT_VARIABLE LLVM_CONFIG_VALUE
     RESULT_VARIABLE LLVM_CONFIG_RETVAL
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   if(LLVM_CONFIG_RETVAL)
     message(SEND_ERROR "Error running llvm-config with arguments: ${ARGN}")
   else()
+    set(${VARIABLE_NAME} ${LLVM_CONFIG_VALUE} CACHE STRING "llvm-config's ${VARIABLE_NAME} value")
     message(STATUS "llvm-config's ${VARIABLE_NAME} is: ${${VARIABLE_NAME}}")
   endif()
 endmacro(run_llvm_config)
@@ -198,8 +200,11 @@ elseif(LLVM_VERSION MATCHES "^11[.]")
 elseif(LLVM_VERSION MATCHES "^12[.]")
   set(LLVM_MAJOR 12)
   set(LLVM_12_0 1)
+elseif(LLVM_VERSION MATCHES "^13[.]")
+  set(LLVM_MAJOR 13)
+  set(LLVM_13_0 1)
 else()
-  message(FATAL_ERROR "LLVM version between 6.0 and 12.0 required, found: ${LLVM_VERSION}")
+  message(FATAL_ERROR "LLVM version between 6.0 and 13.0 required, found: ${LLVM_VERSION}")
 endif()
 
 #############################################################
@@ -269,7 +274,13 @@ endforeach()
 ####################################################################
 
 macro(find_program_or_die OUTPUT_VAR PROG_NAME DOCSTRING)
-  find_program(${OUTPUT_VAR} NAMES "${PROG_NAME}${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "${PROG_NAME}${CMAKE_EXECUTABLE_SUFFIX}" HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}" "${LLVM_PREFIX}" "${LLVM_PREFIX_BIN}" DOC "${DOCSTRING}")
+  find_program(${OUTPUT_VAR}
+    NAMES "${PROG_NAME}${LLVM_BINARY_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}" "${PROG_NAME}${CMAKE_EXECUTABLE_SUFFIX}"
+    HINTS "${LLVM_BINDIR}" "${LLVM_CONFIG_LOCATION}" "${LLVM_PREFIX}" "${LLVM_PREFIX_BIN}"
+    DOC "${DOCSTRING}"
+    NO_CMAKE_PATH
+    NO_CMAKE_ENVIRONMENT_PATH
+  )
   if(${OUTPUT_VAR})
     message(STATUS "Found ${PROG_NAME}: ${${OUTPUT_VAR}}")
   else()
@@ -735,6 +746,7 @@ if(NOT DEFINED CLANG_MARCH_FLAG)
       message(FATAL_ERROR "Could not determine whether to use -march or -mcpu with clang")
     endif()
   endif()
+  message(STATUS "  Using ${CLANG_MARCH_FLAG}")
 
   set(CLANG_MARCH_FLAG ${CLANG_MARCH_FLAG} CACHE INTERNAL "Clang option used to specify the target cpu")
 endif()
