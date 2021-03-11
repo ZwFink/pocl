@@ -39,6 +39,7 @@ typedef struct pool_thread_data thread_data;
 void pthread_scheduler_init (cl_device_id device);
 
 void pthread_scheduler_uninit ();
+void reset_thread_data();
 
 /* Gives ready-to-execute command for scheduler */
 void pthread_scheduler_push_command (_cl_command_node *cmd);

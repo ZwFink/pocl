@@ -31,6 +31,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/time.h>
 
 #include "pocl-pthread_scheduler.h"
 #include "pocl_cl.h"
@@ -40,8 +42,19 @@
 #include "pocl_util.h"
 #include "common.h"
 #include "pocl_mem_management.h"
+void sig_func(int sig)
+{
+ write(1, "Caught signal 11\n", 17);
+ signal(SIGINT,sig_func);
+}
 
 static void* pocl_pthread_driver_thread (void *p);
+long get_elapsed(struct timeval *start, struct timeval *end)
+{
+  long sec_to_us = (long) (end->tv_sec - start->tv_sec) * 1000000L;
+  long us_elapsed = (long) end->tv_usec - start->tv_usec;
+  return sec_to_us + us_elapsed;
+}
 
 struct pool_thread_data
 {
@@ -59,6 +72,22 @@ struct pool_thread_data
   unsigned index;
   /* printf buffer*/
   void *printf_buffer;
+  long total_wait_time_wq;
+  long total_wait_time_kq;
+  long total_exec_time;
+  int num_waited_wq;
+  int num_waited_kq;
+  int num_executed;
+
+  int num_cond_wait;
+  long cond_wait_time;
+
+  long first_wait;
+  pthread_barrier_t *reset_barrier;
+  int *do_reset;
+
+  struct timeval time_thread_begin;
+  struct timeval time_thread_end;
 } __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
 
 typedef struct scheduler_data_
@@ -86,6 +115,12 @@ pthread_scheduler_init (cl_device_id device)
 {
   unsigned i;
   size_t num_worker_threads = device->max_compute_units;
+  pthread_barrier_t *reset_barrier = malloc(sizeof(pthread_barrier_t));
+  int *do_reset = malloc(sizeof(int));
+  *do_reset = 0;
+  // all the worker threads and the master thread will wait for this barrier
+  pthread_barrier_init(reset_barrier, NULL, num_worker_threads+1);
+  printf("Using %zu threads!\n", num_worker_threads);
   POCL_FAST_INIT (scheduler.wq_lock_fast);
 
   pthread_cond_init (&(scheduler.wake_pool), NULL);
@@ -108,7 +143,20 @@ pthread_scheduler_init (cl_device_id device)
 
   for (i = 0; i < num_worker_threads; ++i)
     {
+
       scheduler.thread_pool[i].index = i;
+      scheduler.thread_pool[i].reset_barrier = reset_barrier;
+      scheduler.thread_pool[i].do_reset = do_reset;
+      scheduler.thread_pool[i].total_wait_time_wq = 0;
+      scheduler.thread_pool[i].total_wait_time_kq = 0;
+      scheduler.thread_pool[i].total_exec_time = 0;
+      scheduler.thread_pool[i].cond_wait_time = 0;
+
+      scheduler.thread_pool[i].num_cond_wait = 0;
+      scheduler.thread_pool[i].num_waited_wq = 0;
+      scheduler.thread_pool[i].num_waited_kq = 0;
+      scheduler.thread_pool[i].num_executed = 0;
+
       pthread_create (&scheduler.thread_pool[i].thread, NULL,
                       pocl_pthread_driver_thread,
                       (void*)&scheduler.thread_pool[i]);
@@ -131,9 +179,69 @@ pthread_scheduler_uninit ()
       pthread_join (scheduler.thread_pool[i].thread, NULL);
     }
 
-  pocl_aligned_free (scheduler.thread_pool);
-  POCL_FAST_DESTROY (scheduler.wq_lock_fast);
-  pthread_cond_destroy (&scheduler.wake_pool);
+  int num_waited_total = 0;
+  int total_waited_wq = 0;
+  int total_waited_kq = 0;
+  int total_cond_wait = 0;
+  int total_executed = 0;
+
+  long time_waited_total = 0;
+  long total_time_wq = 0;
+  long total_time_kq = 0;
+  long total_time_alive = 0;
+  long total_time_cond_wait = 0;
+  long total_exec_time = 0;
+
+  printf("TIMING_ANALYSIS_INDIV: Thread Id,Total Num Wait,Total wait time, Num wait Queue, Num Kernel Queue,Time Wait queue, Time Kernel Queue,Time Alive,Num Cond Wait, Cond Wait Time,Num Exec Calls,Time Exec\n");
+  for(i = 0; i < scheduler.num_threads; ++i)
+    {
+      struct pool_thread_data *td = &scheduler.thread_pool[i];
+      long time_alive = get_elapsed(&td->time_thread_begin, &td->time_thread_end);
+
+      int num_waited_wq = td->num_waited_wq;
+      int num_waited_kq = td->num_waited_kq;
+      int num_waited_cond = td->num_cond_wait;
+      int num_executed = td->num_executed;
+
+
+      long time_waited_wq = td->total_wait_time_wq;
+      long time_waited_kq = td->total_wait_time_kq;
+      long time_waited_cond = td->cond_wait_time;
+      long exec_time = td->total_exec_time;
+
+      printf("TIMING_ANALYSIS_INDIV:%d,%d%ld,%d,%ld,%d,%ld,%ld,%d,%ld,%d,%ld\n",
+             td->index,
+             num_waited_wq + num_waited_kq,
+             time_waited_kq + time_waited_wq,
+             num_waited_wq, time_waited_wq,
+             num_waited_kq, time_waited_kq,
+             time_alive,
+             num_waited_cond, time_waited_cond,
+             num_executed, exec_time
+             );
+
+      num_waited_total += num_waited_wq + num_waited_kq;
+      total_waited_wq += num_waited_wq;
+      total_waited_kq += num_waited_kq;
+      total_cond_wait += num_waited_cond;
+      time_waited_total += time_waited_wq + time_waited_kq;
+      total_time_wq += time_waited_wq;
+      total_time_kq += time_waited_kq;
+      total_time_alive += time_alive;
+      total_time_cond_wait += time_waited_cond;
+      total_executed += num_executed;
+      total_exec_time += exec_time;
+    }
+  printf("TIMING_ANALYSIS_AGG: Total Num Wait, Num Wait Work Queue, Num Wait Kernel Queue,Total Wait Time, Work Queue Time, "
+         "Kernel Queue Time, Avg Wait Time, Total Time All Threads,Num Wait Cond,Time wait cond,Total Exec Calls, Total Exec Time\n");
+  printf("TIMING_ANALYSIS_AGG: %d,%d,%d,%ld,%ld,%ld,%f,%ld,%d,%ld,%d,%ld\n",
+         num_waited_total, total_waited_wq, total_waited_kq, time_waited_total, total_time_wq, total_time_kq,
+         ((double)time_waited_total)/(double)num_waited_total, total_time_alive, total_cond_wait, total_time_cond_wait, total_executed, total_exec_time
+         );
+
+  /* pocl_aligned_free (scheduler.thread_pool); */
+  /* POCL_FAST_DESTROY (scheduler.wq_lock_fast); */
+  /* pthread_cond_destroy (&scheduler.wake_pool); */
 
   scheduler.thread_pool_shutdown_requested = 0;
 }
@@ -151,6 +259,11 @@ void pthread_scheduler_push_command (_cl_command_node *cmd)
 static void
 pthread_scheduler_push_kernel (kernel_run_command *run_cmd)
 {
+  struct timeval wait_start;
+  struct timeval wait_end;
+
+  /* execute kernel if available */
+  // work queue lock fast
   POCL_FAST_LOCK (scheduler.wq_lock_fast);
   DL_APPEND (scheduler.kernel_queue, run_cmd);
   pthread_cond_broadcast (&scheduler.wake_pool);
@@ -184,14 +297,27 @@ shall_we_run_this (thread_data *td, cl_device_id subd)
 
 static int
 get_wg_index_range (kernel_run_command *k, unsigned *start_index,
-                    unsigned *end_index, int *last_wgs, unsigned num_threads)
+                    unsigned *end_index, int *last_wgs, unsigned num_threads,
+                    thread_data *td)
 {
   const unsigned scaled_max_wgs = POCL_PTHREAD_MAX_WGS * num_threads;
   const unsigned scaled_min_wgs = POCL_PTHREAD_MIN_WGS * num_threads;
+  struct timeval wait_start;
+  struct timeval wait_end;
+
+  /* execute kernel if available */
+  // work queue lock fast
+
 
   unsigned limit;
   unsigned max_wgs;
+  gettimeofday(&wait_start, NULL);
   POCL_FAST_LOCK (k->lock);
+  gettimeofday(&wait_end, NULL);
+  td->total_wait_time_kq += get_elapsed(&wait_start, &wait_end);
+  td->num_waited_kq++;
+
+
   if (k->remaining_wgs == 0)
     {
       POCL_FAST_UNLOCK (k->lock);
@@ -253,7 +379,7 @@ work_group_scheduler (kernel_run_command *k,
   int last_wgs = 0;
 
   if (!get_wg_index_range (k, &start_index, &end_index, &last_wgs,
-                           thread_data->num_threads))
+                           thread_data->num_threads, thread_data))
     return 0;
 
   assert (end_index >= start_index);
@@ -284,12 +410,19 @@ work_group_scheduler (kernel_run_command *k,
   unsigned slice_size = k->pc.num_groups[0] * k->pc.num_groups[1];
   unsigned row_size = k->pc.num_groups[0];
 
+  struct timeval wait_start;
+  struct timeval wait_end;
+
   do
     {
       if (last_wgs)
         {
+          gettimeofday(&wait_start, NULL);
           POCL_FAST_LOCK (scheduler.wq_lock_fast);
+          gettimeofday(&wait_end, NULL);
           DL_DELETE (scheduler.kernel_queue, k);
+          thread_data->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
+          thread_data->num_waited_wq++;
           POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
         }
 
@@ -304,12 +437,17 @@ work_group_scheduler (kernel_run_command *k,
                  gids[0], gids[1], gids[2]);
 #endif
           pocl_set_default_rm ();
+
+          gettimeofday(&wait_start, NULL);
           k->workgroup ((uint8_t*)arguments, (uint8_t*)&pc,
-			gids[0], gids[1], gids[2]);
+                        gids[0], gids[1], gids[2]);
+          gettimeofday(&wait_end, NULL);
+          thread_data->total_exec_time += get_elapsed(&wait_start, &wait_end);
+          thread_data->num_executed++;
         }
     }
   while (get_wg_index_range (k, &start_index, &end_index, &last_wgs,
-                             thread_data->num_threads));
+                             thread_data->num_threads, thread_data));
 
   if (position > 0)
     {
@@ -436,29 +574,60 @@ pthread_scheduler_get_work (thread_data *td)
 {
   _cl_command_node *cmd;
   kernel_run_command *run_cmd;
+  struct timeval wait_start;
+  struct timeval wait_end;
 
   /* execute kernel if available */
+  // work queue lock fast
+  gettimeofday(&wait_start, NULL);
   POCL_FAST_LOCK (scheduler.wq_lock_fast);
+  gettimeofday(&wait_end, NULL);
+  td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
+  td->num_waited_wq++;
+
+  int do_reset = 0;
   int do_exit = 0;
 
 RETRY:
+  // should we shutdown this??
   do_exit = scheduler.thread_pool_shutdown_requested;
+  do_reset = *td->do_reset;
 
+  // is this thread data associated with a kernel run command?
+  // is there a device available to run this kernel?
   run_cmd = check_kernel_queue_for_device (td);
+  // if this is a kernel to execute, we should execute it
   /* execute kernel if available */
   if (run_cmd)
     {
       ++run_cmd->ref_count;
+
+
       POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
 
+
+      // if so, we wan tto go ahead and run it
       work_group_scheduler (run_cmd, td);
 
+      gettimeofday(&wait_start, NULL);
+
       POCL_FAST_LOCK (scheduler.wq_lock_fast);
+      gettimeofday(&wait_end, NULL);
+      td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
+      td->num_waited_wq++;
+
+
+      // are we the last thread to have a reference to the kernel?
       if ((--run_cmd->ref_count) == 0)
         {
           POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
           finalize_kernel_command (td, run_cmd);
+
+          gettimeofday(&wait_start, NULL);
           POCL_FAST_LOCK (scheduler.wq_lock_fast);
+          gettimeofday(&wait_end, NULL);
+          td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
+          td->num_waited_wq++;
         }
     }
 
@@ -479,14 +648,31 @@ RETRY:
           pocl_exec_command (cmd);
         }
 
+      gettimeofday(&wait_start, NULL);
+
       POCL_FAST_LOCK (scheduler.wq_lock_fast);
+      gettimeofday(&wait_end, NULL);
+      td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
+      td->num_waited_wq++;
       ++td->executed_commands;
     }
 
   /* if neither a command nor a kernel was available, sleep */
-  if ((cmd == NULL) && (run_cmd == NULL) && (do_exit == 0))
+  if ((cmd == NULL) && (run_cmd == NULL) && (do_exit == 0) && do_reset == 0)
     {
+      gettimeofday(&wait_start, NULL);
       pthread_cond_wait (&scheduler.wake_pool, &scheduler.wq_lock_fast);
+      gettimeofday(&wait_end, NULL);
+      td->num_cond_wait++;
+      td->cond_wait_time += get_elapsed(&wait_start, &wait_end);
+      if(td->num_cond_wait == 1)
+        {
+          td->first_wait = td->cond_wait_time;
+          printf("First Wait: %ld\n", td->cond_wait_time);
+        }
+      if(td->num_cond_wait == 2)
+        printf("Second Wait: %ld\n", td->cond_wait_time-td->first_wait);
+
       goto RETRY;
     }
 
@@ -495,6 +681,26 @@ RETRY:
   return do_exit;
 }
 
+// to be called from python
+void reset_thread_data()
+{
+  *scheduler.thread_pool[0].do_reset = 1;
+  pthread_cond_broadcast (&scheduler.wake_pool);
+  pthread_barrier_wait(scheduler.thread_pool[0].reset_barrier);
+}
+
+void reset_data(struct pool_thread_data *td)
+{
+      td->total_wait_time_wq = 0;
+      td->total_wait_time_kq = 0;
+      td->total_exec_time = 0;
+      td->cond_wait_time = 0;
+
+      td->num_cond_wait = 0;
+      td->num_waited_wq = 0;
+      td->num_waited_kq = 0;
+      td->num_executed = 0;
+}
 
 static
 void*
@@ -503,6 +709,7 @@ pocl_pthread_driver_thread (void *p)
   struct pool_thread_data *td = (struct pool_thread_data*)p;
   int do_exit = 0;
   assert (td);
+  signal(SIGINT,sig_func); // Register signal handler before going multithread
   /* some random value, doesn't matter as long as it's not a valid bool - to
    * force a first FTZ setup */
   td->current_ftz = 213;
@@ -516,7 +723,7 @@ pocl_pthread_driver_thread (void *p)
                                        scheduler.local_mem_size);
   assert (td->local_mem);
 #ifdef __linux__
-  if (pocl_get_bool_option ("POCL_AFFINITY", 0))
+  if (1)
     {
       cpu_set_t set;
       CPU_ZERO (&set);
@@ -524,15 +731,31 @@ pocl_pthread_driver_thread (void *p)
       pthread_setaffinity_np (td->thread, sizeof (cpu_set_t), &set);
     }
 #endif
+  int has_done = 0;
 
   while (1)
     {
+
+      if(!has_done)
+        {
+          has_done = 1;
+          gettimeofday(&td->time_thread_begin, NULL);
+        }
       do_exit = pthread_scheduler_get_work (td);
       if (do_exit)
         {
+          gettimeofday(&td->time_thread_end, NULL);
           pocl_aligned_free (td->printf_buffer);
           pocl_aligned_free (td->local_mem);
           pthread_exit (NULL);
+        }
+      int do_reset = *td->do_reset;
+      if(do_reset)
+        {
+          reset_data(td);
+          has_done = 0;
+          pthread_barrier_wait(td->reset_barrier);
+          *(td->do_reset) = 0;
         }
     }
 }

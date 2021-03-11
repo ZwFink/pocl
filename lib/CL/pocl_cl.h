@@ -66,11 +66,15 @@ typedef pthread_mutex_t pocl_lock_t;
 
 /* Generic functionality for handling different types of 
    OpenCL (host) objects. */
+static int lock_it(pthread_mutex_t *lock)
+{
+  return pthread_mutex_lock(lock);
+}
 
 #define POCL_LOCK(__LOCK__)                                                   \
   do                                                                          \
     {                                                                         \
-      int r = pthread_mutex_lock (&(__LOCK__));                               \
+      int r = lock_it (&(__LOCK__));                               \
       assert (r == 0);                                                        \
     }                                                                         \
   while (0)

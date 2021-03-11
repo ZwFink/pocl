@@ -204,18 +204,24 @@ pocl_pthread_init (unsigned j, cl_device_id device, const char* parameters)
   return ret;
 }
 
+
+void reset_threads()
+{
+  reset_thread_data();
+}
+
 cl_int
 pocl_pthread_uninit (unsigned j, cl_device_id device)
 {
   struct data *d = (struct data*)device->data;
 
-  if (scheduler_initialized)
+  if (device->data != NULL && scheduler_initialized)
     {
       pthread_scheduler_uninit ();
       scheduler_initialized = 0;
     }
 
-  POCL_MEM_FREE(d);
+  /* POCL_MEM_FREE(d); */
   device->data = NULL;
   return CL_SUCCESS;
 }
