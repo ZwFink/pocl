@@ -72,17 +72,17 @@ struct pool_thread_data
   unsigned index;
   /* printf buffer*/
   void *printf_buffer;
-  long total_wait_time_wq;
-  long total_wait_time_kq;
-  long total_exec_time;
-  int num_waited_wq;
-  int num_waited_kq;
-  int num_executed;
+  long long total_wait_time_wq;
+  long long total_wait_time_kq;
+  long long total_exec_time;
+  long long num_waited_wq;
+  long long num_waited_kq;
+  long long num_executed;
 
-  int num_cond_wait;
-  long cond_wait_time;
+  long long num_cond_wait;
+  long long cond_wait_time;
 
-  long first_wait;
+  long long first_wait;
   pthread_barrier_t *reset_barrier;
   int *do_reset;
 
@@ -179,37 +179,37 @@ pthread_scheduler_uninit ()
       pthread_join (scheduler.thread_pool[i].thread, NULL);
     }
 
-  int num_waited_total = 0;
-  int total_waited_wq = 0;
-  int total_waited_kq = 0;
-  int total_cond_wait = 0;
-  int total_executed = 0;
+  long long num_waited_total = 0;
+  long long total_waited_wq = 0;
+  long long total_waited_kq = 0;
+  long long total_cond_wait = 0;
+  long long total_executed = 0;
 
-  long time_waited_total = 0;
-  long total_time_wq = 0;
-  long total_time_kq = 0;
-  long total_time_alive = 0;
-  long total_time_cond_wait = 0;
-  long total_exec_time = 0;
+  long long time_waited_total = 0;
+  long long total_time_wq = 0;
+  long long total_time_kq = 0;
+  long long total_time_alive = 0;
+  long long total_time_cond_wait = 0;
+  long long total_exec_time = 0;
 
   printf("TIMING_ANALYSIS_INDIV: Thread Id,Total Num Wait,Total wait time, Num wait Queue, Num Kernel Queue,Time Wait queue, Time Kernel Queue,Time Alive,Num Cond Wait, Cond Wait Time,Num Exec Calls,Time Exec\n");
   for(i = 0; i < scheduler.num_threads; ++i)
     {
       struct pool_thread_data *td = &scheduler.thread_pool[i];
-      long time_alive = get_elapsed(&td->time_thread_begin, &td->time_thread_end);
+      long long  time_alive = get_elapsed(&td->time_thread_begin, &td->time_thread_end);
 
-      int num_waited_wq = td->num_waited_wq;
-      int num_waited_kq = td->num_waited_kq;
-      int num_waited_cond = td->num_cond_wait;
-      int num_executed = td->num_executed;
+      long long num_waited_wq = td->num_waited_wq;
+      long long num_waited_kq = td->num_waited_kq;
+      long long num_waited_cond = td->num_cond_wait;
+      long long num_executed = td->num_executed;
 
 
-      long time_waited_wq = td->total_wait_time_wq;
-      long time_waited_kq = td->total_wait_time_kq;
-      long time_waited_cond = td->cond_wait_time;
-      long exec_time = td->total_exec_time;
+      long long time_waited_wq = td->total_wait_time_wq;
+      long long time_waited_kq = td->total_wait_time_kq;
+      long long time_waited_cond = td->cond_wait_time;
+      long long exec_time = td->total_exec_time;
 
-      printf("TIMING_ANALYSIS_INDIV:%d,%d%ld,%d,%ld,%d,%ld,%ld,%d,%ld,%d,%ld\n",
+      printf("TIMING_ANALYSIS_INDIV:%d,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld,%lld\n",
              td->index,
              num_waited_wq + num_waited_kq,
              time_waited_kq + time_waited_wq,
@@ -234,7 +234,7 @@ pthread_scheduler_uninit ()
     }
   printf("TIMING_ANALYSIS_AGG: Total Num Wait, Num Wait Work Queue, Num Wait Kernel Queue,Total Wait Time, Work Queue Time, "
          "Kernel Queue Time, Avg Wait Time, Total Time All Threads,Num Wait Cond,Time wait cond,Total Exec Calls, Total Exec Time\n");
-  printf("TIMING_ANALYSIS_AGG: %d,%d,%d,%ld,%ld,%ld,%f,%ld,%d,%ld,%d,%ld\n",
+  printf("TIMING_ANALYSIS_AGG: %lld,%lld,%lld,%lld,%lld,%lld,%f,%lld,%lld,%lld,%lld,%lld\n",
          num_waited_total, total_waited_wq, total_waited_kq, time_waited_total, total_time_wq, total_time_kq,
          ((double)time_waited_total)/(double)num_waited_total, total_time_alive, total_cond_wait, total_time_cond_wait, total_executed, total_exec_time
          );
@@ -668,10 +668,10 @@ RETRY:
       if(td->num_cond_wait == 1)
         {
           td->first_wait = td->cond_wait_time;
-          printf("First Wait: %ld\n", td->cond_wait_time);
+          printf("First Wait: %lld\n", td->cond_wait_time);
         }
       if(td->num_cond_wait == 2)
-        printf("Second Wait: %ld\n", td->cond_wait_time-td->first_wait);
+        printf("Second Wait: %lld\n", td->cond_wait_time-td->first_wait);
 
       goto RETRY;
     }
