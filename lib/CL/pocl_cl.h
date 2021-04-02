@@ -74,7 +74,10 @@ static int lock_it(pthread_mutex_t *lock)
 #define POCL_LOCK(__LOCK__)                                                   \
   do                                                                          \
     {                                                                         \
-      int r = lock_it (&(__LOCK__));                               \
+      int r = lock_it (&(__LOCK__));                                          \
+      if(r != 0) {                                                            \
+        printf("R is? %d\n", r);                                              \
+      }                                                                       \
       assert (r == 0);                                                        \
     }                                                                         \
   while (0)

@@ -42,12 +42,6 @@
 #include "pocl_util.h"
 #include "common.h"
 #include "pocl_mem_management.h"
-void sig_func(int sig)
-{
- write(1, "Caught signal 11\n", 17);
- signal(SIGINT,sig_func);
-}
-
 static void* pocl_pthread_driver_thread (void *p);
 long get_elapsed(struct timeval *start, struct timeval *end)
 {
@@ -88,6 +82,7 @@ struct pool_thread_data
 
   struct timeval time_thread_begin;
   struct timeval time_thread_end;
+  kernel_run_command *last_run_kernel;
 } __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
 
 typedef struct scheduler_data_
@@ -311,12 +306,50 @@ get_wg_index_range (kernel_run_command *k, unsigned *start_index,
 
   unsigned limit;
   unsigned max_wgs;
+  unsigned ind_idx = td->index;
+  unsigned my_num_wgs = k->wgs_original / num_threads;
   gettimeofday(&wait_start, NULL);
+  printf("Thread %d acquiring lock for kernel %p\n", ind_idx, k);
   POCL_FAST_LOCK (k->lock);
+  k->nthreads_observed += 1;
   gettimeofday(&wait_end, NULL);
   td->total_wait_time_kq += get_elapsed(&wait_start, &wait_end);
   td->num_waited_kq++;
 
+  // all that matters is that this is the last thread to see the kernel,
+  // because every thread must see every kernel
+  // the decision is made below whether this thread will actually execute any wgs within the kernel
+  /* if (k->nthreads_observed == num_threads) */
+  /*   { */
+  /*     printf("%d Finished all wgs for kernel %p!\n", ind_idx, k); */
+  /*     printf("Remaining: %d\n", k->remaining_wgs); */
+  /*     *last_wgs = 1; */
+  /*   } */
+
+
+
+  *start_index = my_num_wgs * ind_idx;
+  *end_index = my_num_wgs * (ind_idx + 1) - 1;
+
+
+  if(ind_idx + 1 == num_threads)
+    {
+    *end_index = k->wgs_original-1;
+    printf("Thread %d is the last thread, doing wgs %d to %d\n", ind_idx, *start_index, *end_index);
+    }
+
+  if(k->wgs_original < num_threads)
+    {
+      if(ind_idx > k->wgs_original - 1)
+        {
+          POCL_FAST_UNLOCK (k->lock);
+          return 0;
+        }
+      else
+        {
+          *start_index = *end_index = ind_idx;
+        }
+    }
 
   if (k->remaining_wgs == 0)
     {
@@ -331,23 +364,27 @@ get_wg_index_range (kernel_run_command *k, unsigned *start_index,
    * If we have enough workgroups, scale up the requests linearly by
    * num_threads, otherwise fallback to smaller workgroups.
    */
-  if (k->remaining_wgs <= (scaled_max_wgs * num_threads))
-    limit = scaled_min_wgs;
-  else
-    limit = scaled_max_wgs;
+  /* if (k->remaining_wgs <= (scaled_max_wgs * num_threads)) */
+  /*   limit = scaled_min_wgs; */
+  /* else */
+  /*   limit = scaled_max_wgs; */
 
   // divide two integers rounding up, i.e. ceil(k->remaining_wgs/num_threads)
-  const unsigned wgs_per_thread = (1 + (k->remaining_wgs - 1) / num_threads);
-  max_wgs = min (limit, wgs_per_thread);
-  max_wgs = min (max_wgs, k->remaining_wgs);
-  assert (max_wgs > 0);
+  /* const unsigned wgs_per_thread = (1 + (k->remaining_wgs - 1) / num_threads); */
+  /* max_wgs = min (limit, wgs_per_thread); */
+  /* max_wgs = min (limit, wgs_per_thread); */
+  if(*end_index < *start_index)
+    {
+      POCL_FAST_UNLOCK (k->lock);
+      return 0;
+    }
 
-  *start_index = k->wgs_dealt;
-  *end_index = k->wgs_dealt + max_wgs-1;
-  k->remaining_wgs -= max_wgs;
-  k->wgs_dealt += max_wgs;
-  if (k->remaining_wgs == 0)
-    *last_wgs = 1;
+  k->wgs_dealt += (*end_index - *start_index)+1;
+  k->remaining_wgs -= (*end_index - *start_index)+1;
+  assert (k->remaining_wgs >= 0);
+  if(k->wgs_dealt > k->wgs_original)
+    printf("Thread %d, Wgs dealt %d, wg original %d, start %d, end %d\n", ind_idx, k->wgs_dealt, k->wgs_original, *start_index, *end_index);
+  assert (k->wgs_dealt <= k->wgs_original);
   POCL_FAST_UNLOCK (k->lock);
 
   return 1;
@@ -378,9 +415,16 @@ work_group_scheduler (kernel_run_command *k,
   unsigned end_index;
   int last_wgs = 0;
 
+  thread_data->last_run_kernel = k;
   if (!get_wg_index_range (k, &start_index, &end_index, &last_wgs,
                            thread_data->num_threads, thread_data))
-    return 0;
+    {
+      return 0;
+    }
+
+  printf("Thread %d last run kernel %p\n", thread_data->index, thread_data->last_run_kernel);
+  thread_data->last_run_kernel = k;
+  printf("Thread %d last run kernel %p\n", thread_data->index, thread_data->last_run_kernel);
 
   assert (end_index >= start_index);
 
@@ -412,19 +456,7 @@ work_group_scheduler (kernel_run_command *k,
 
   struct timeval wait_start;
   struct timeval wait_end;
-
-  do
-    {
-      if (last_wgs)
-        {
-          gettimeofday(&wait_start, NULL);
-          POCL_FAST_LOCK (scheduler.wq_lock_fast);
-          gettimeofday(&wait_end, NULL);
-          DL_DELETE (scheduler.kernel_queue, k);
-          thread_data->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
-          thread_data->num_waited_wq++;
-          POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
-        }
+  printf("Thread %d executing kernel %p, performing wgs %d to %d\n", thread_data->index, k, start_index, end_index);
 
       for (i = start_index; i <= end_index; ++i)
         {
@@ -445,9 +477,6 @@ work_group_scheduler (kernel_run_command *k,
           thread_data->total_exec_time += get_elapsed(&wait_start, &wait_end);
           thread_data->num_executed++;
         }
-    }
-  while (get_wg_index_range (k, &start_index, &end_index, &last_wgs,
-                             thread_data->num_threads, thread_data));
 
   if (position > 0)
     {
@@ -464,6 +493,7 @@ static void
 finalize_kernel_command (struct pool_thread_data *thread_data,
                          kernel_run_command *k)
 {
+  printf("Finalize kernel %p my thread %d, refounct %d\n", k, thread_data->index, k->ref_count);
 #ifdef DEBUG_MT
   printf("### kernel %s finished\n", k->cmd->command.run.kernel->name);
 #endif
@@ -503,6 +533,8 @@ pocl_pthread_prepare_kernel (void *data, _cl_command_node *cmd)
   run_cmd->pc.printf_buffer_position = NULL;
   run_cmd->remaining_wgs = num_groups;
   run_cmd->wgs_dealt = 0;
+  run_cmd->nthreads_observed = 0;
+  run_cmd->wgs_original = num_groups;
   run_cmd->workgroup = cmd->command.run.wg;
   run_cmd->kernel_args = cmd->command.run.arguments;
   run_cmd->next = NULL;
@@ -598,10 +630,13 @@ RETRY:
   run_cmd = check_kernel_queue_for_device (td);
   // if this is a kernel to execute, we should execute it
   /* execute kernel if available */
-  if (run_cmd)
+  if (run_cmd && td->last_run_kernel != run_cmd)
     {
-      ++run_cmd->ref_count;
-
+      printf("Ref count: %d\n", run_cmd->ref_count);
+      if(run_cmd->ref_count == 0)
+        {
+          run_cmd->ref_count = td->num_threads;
+        }
 
       POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
 
@@ -620,14 +655,17 @@ RETRY:
       // are we the last thread to have a reference to the kernel?
       if ((--run_cmd->ref_count) == 0)
         {
-          POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
-          finalize_kernel_command (td, run_cmd);
+          /* gettimeofday(&wait_start, NULL); */
+          /* gettimeofday(&wait_end, NULL); */
+          DL_DELETE (scheduler.kernel_queue, run_cmd);
+          /* POCL_FAST_UNLOCK (scheduler.wq_lock_fast); */
+          /* td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end); */
+          /* td->num_waited_wq++; */
 
-          gettimeofday(&wait_start, NULL);
+          POCL_FAST_UNLOCK (scheduler.wq_lock_fast);
+
+          finalize_kernel_command (td, run_cmd);
           POCL_FAST_LOCK (scheduler.wq_lock_fast);
-          gettimeofday(&wait_end, NULL);
-          td->total_wait_time_wq += get_elapsed(&wait_start, &wait_end);
-          td->num_waited_wq++;
         }
     }
 
@@ -709,7 +747,6 @@ pocl_pthread_driver_thread (void *p)
   struct pool_thread_data *td = (struct pool_thread_data*)p;
   int do_exit = 0;
   assert (td);
-  signal(SIGINT,sig_func); // Register signal handler before going multithread
   /* some random value, doesn't matter as long as it's not a valid bool - to
    * force a first FTZ setup */
   td->current_ftz = 213;

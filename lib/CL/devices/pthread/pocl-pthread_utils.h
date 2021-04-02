@@ -56,7 +56,9 @@ struct kernel_run_command
   POCL_FAST_LOCK_T lock __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
 
   size_t remaining_wgs __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
-  size_t wgs_dealt;
+  size_t wgs_dealt __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  size_t nthreads_observed __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
+  size_t wgs_original;
 
   struct pocl_context pc __attribute__ ((aligned (HOST_CPU_CACHELINE_SIZE)));
 
