@@ -46,6 +46,7 @@ struct kernel_run_command
   kernel_run_command *prev;
   kernel_run_command *next;
   unsigned long ref_count;
+  unsigned long kernel_id;
 
   /* actual kernel arguments. these are setup once at the kernel setup
    * phase, then each thread sets up the local arguments for itself. */
