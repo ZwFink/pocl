@@ -342,6 +342,14 @@ get_wg_index_range (kernel_run_command *k, unsigned *start_index,
 
   if(k->wgs_original < num_threads)
     {
+      if(k->wgs_original == 1)
+        {
+          k->wgs_dealt = 1;
+          k->remaining_wgs = 0;
+          *start_index = *end_index = 0;
+          POCL_FAST_UNLOCK (k->lock);
+          return 1;
+        }
       if(ind_idx > k->wgs_original - 1)
         {
           POCL_FAST_UNLOCK (k->lock);
@@ -717,7 +725,7 @@ RETRY:
     }
 
   /* if neither a command nor a kernel was available, sleep */
-  if ((cmd == NULL) && (run_cmd == NULL) && (do_exit == 0) && do_reset == 0)
+  if ((cmd == NULL) && ((run_cmd == NULL)|| (td->last_run_kernel == run_cmd->kernel_id)) && (do_exit == 0) && do_reset == 0)
     {
       /* printf("Thread %d found nothing, going to sleep\n", td->index); */
       gettimeofday(&wait_start, NULL);
